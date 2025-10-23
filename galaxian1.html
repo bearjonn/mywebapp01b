@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Galaxion 1979 – superenkel (JS + Canvas)</title>
+  <style>
+    html,body{height:100%;margin:0;background:#0b0f19;color:#e7eefc;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+    .wrap{display:grid;place-items:center;height:100%}
+    canvas{background:#040710;border:2px solid #1e2b4a;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+    .hint{position:fixed;inset:auto 0 12px 0;text-align:center;opacity:.8;font-size:14px}
+    a{color:#8ad1ff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="game" width="480" height="640"></canvas>
+  </div>
+  <div class="hint">Pil ←/→ for å styre • SPACE skyter • R for å restarte</div>
+
+  <script>
+  // --- Superenkel Galaxian-aktig klon for undervisning (kun JS + Canvas) ---
+  // Mål: Minimal kode som viser input, opptegning, game loop, kollisjon og enkel AI.
+
+  const W = 480, H = 640;             // Lerret-størrelse
+  const ctx = document.getElementById('game').getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  // --- Spilltilstand ---
+  let gameOver = false;
+  let youWin = false;
+  let score = 0;
+
+  // Spiller (en liten trekant/skip)
+  const player = {
+    x: W/2, y: H - 50, w: 22, h: 12, speed: 4.0,
+    cooldown: 0
+  };
+
+  // Prosjektiler (fra spiller)
+  const shots = [];
+
+  // Fiender i rutenett
+  const rows = 5, cols = 8;
+  const enemies = [];
+  const enemySpacingX = 48, enemySpacingY = 32;
+  const enemyStartX = 60, enemyStartY = 80;
+  let enemyDX = 0.8;  // horisontal hastighet for hele svermen
+  let stepDown = 18;  // hvor mye de går ned når de snur
+
+  function resetEnemies() {
+    enemies.length = 0;
+    for (let r=0; r<rows; r++) {
+      for (let c=0; c<cols; c++) {
+        enemies.push({
+          x: enemyStartX + c*enemySpacingX,
+          y: enemyStartY + r*enemySpacingY,
+          w: 20, h: 14,
+          alive: true,
+          color: r === 0 ? '#ff5e5e' : r < 3 ? '#ffd166' : '#6ee7b7'
+        });
+      }
+    }
+    enemyDX = 0.8;
+  }
+
+  resetEnemies();
+
+  // --- Input ---
+  const keys = {};
+  addEventListener('keydown', (e)=>{
+    keys[e.code] = true;
+    if (e.code === 'KeyR') restart();
+  });
+  addEventListener('keyup', (e)=> keys[e.code] = false);
+
+  // --- Verktøyfunksjoner ---
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+  function rect(a,b){
+    return !(a.x+a.w < b.x || a.x > b.x+b.w || a.y+a.h < b.y || a.y > b.y+b.h);
+  }
+
+  function fire() {
+    if (player.cooldown > 0) return;
+    shots.push({ x: player.x-2, y: player.y-10, w: 4, h: 10, vy: -6 });
+    player.cooldown = 220; // ms mellom skudd
+  }
+
+  function restart(){
+    score = 0; gameOver = false; youWin = false;
+    player.x = W/2; player.y = H-50; player.cooldown = 0;
+    shots.length = 0; resetEnemies();
+  }
+
+  // --- Oppdatering ---
+  let last = performance.now();
+  function loop(t){
+    const dt = t - last; last = t;
+    update(dt); draw();
+    requestAnimationFrame(loop);
+  }
+
+  function update(dt){
+    if (gameOver || youWin) return;
+
+    // Spillerbevegelse
+    const left = keys['ArrowLeft'] || keys['KeyA'];
+    const right = keys['ArrowRight'] || keys['KeyD'];
+    if (left)  player.x -= player.speed;
+    if (right) player.x += player.speed;
+    player.x = clamp(player.x, 16, W-16);
+
+    // Skudd
+    if (keys['Space']) fire();
+    if (player.cooldown > 0) player.cooldown -= dt;
+
+    for (let i=shots.length-1; i>=0; i--){
+      const s = shots[i];
+      s.y += s.vy;
+      if (s.y + s.h < 0) shots.splice(i,1);
+    }
+
+    // Fiender – flytt hele formasjonen
+    let minX = Infinity, maxX = -Infinity;
+    for (const e of enemies){
+      if (!e.alive) continue;
+      e.x += enemyDX;
+      minX = Math.min(minX, e.x);
+      maxX = Math.max(maxX, e.x + e.w);
+    }
+    // Sjekk veggkollisjon for svermen
+    if (minX < 12 || maxX > W-12){
+      enemyDX = -enemyDX;
+      for (const e of enemies){ if (e.alive) e.y += stepDown; }
+      // litt raskere hver snu for enkel progresjon
+      enemyDX *= 1.05;
+    }
+
+    // Kollisjoner: spiller-skudd mot fiende
+    for (let i=shots.length-1; i>=0; i--){
+      const s = shots[i];
+      for (const e of enemies){
+        if (!e.alive) continue;
+        if (rect({x:s.x,y:s.y,w:s.w,h:s.h}, e)){
+          e.alive = false; shots.splice(i,1); score += 10; break;
+        }
+      }
+    }
+
+    // Nederlag: om en fiende når spilleren
+    for (const e of enemies){
+      if (!e.alive) continue;
+      if (e.y + e.h >= player.y){ gameOver = true; }
+    }
+
+    // Seier: alle borte
+    if (enemies.every(e=>!e.alive)) youWin = true;
+  }
+
+  // --- Tegning ---
+  function draw(){
+    // Bakgrunn – stjernehimmel
+    ctx.fillStyle = '#050814';
+    ctx.fillRect(0,0,W,H);
+    for (let i=0;i<60;i++){
+      const x = (i*73 % W);
+      const y = (i*131 % H);
+      ctx.fillStyle = i%7===0? '#7dd3fc' : '#93c5fd';
+      ctx.fillRect((x+performance.now()/70)%W, y, 2, 2);
+    }
+
+    // Score
+    ctx.fillStyle = '#e7eefc';
+    ctx.font = '16px system-ui, sans-serif';
+    ctx.fillText('SCORE: ' + score, 16, 24);
+
+    // Spiller (trekant)
+    drawPlayer(player.x, player.y);
+
+    // Skudd
+    ctx.fillStyle = '#a5b4fc';
+    for (const s of shots){ ctx.fillRect(s.x, s.y, s.w, s.h); }
+
+    // Fiender
+    for (const e of enemies){
+      if (!e.alive) continue;
+      drawEnemy(e);
+    }
+
+    if (gameOver || youWin){
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = youWin ? '#7ef29a' : '#ff8fa3';
+      ctx.font = 'bold 28px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(youWin? 'SEIER! 🎉' : 'GAME OVER', W/2, H/2 - 12);
+      ctx.font = '16px system-ui, sans-serif';
+      ctx.fillStyle = '#e7eefc';
+      ctx.fillText('Trykk R for å restarte', W/2, H/2 + 16);
+      ctx.textAlign = 'start';
+    }
+  }
+
+  function drawPlayer(px, py){
+    // Liten trekant
+    ctx.fillStyle = '#8bffd1';
+    ctx.beginPath();
+    ctx.moveTo(px, py-10);
+    ctx.lineTo(px-12, py+8);
+    ctx.lineTo(px+12, py+8);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawEnemy(e){
+    // Enkel "alien"-form
+    ctx.fillStyle = e.color;
+    ctx.fillRect(e.x, e.y, e.w, e.h);
+    ctx.fillStyle = '#0b0f19';
+    ctx.fillRect(e.x+4, e.y+4, 4, 4);
+    ctx.fillRect(e.x+e.w-8, e.y+4, 4, 4);
+  }
+
+  requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
